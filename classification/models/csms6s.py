@@ -275,18 +275,20 @@ class SelectiveScanOflex(torch.autograd.Function):
     @torch.cuda.amp.custom_fwd
     def forward(ctx, u, delta, A, B, C, D=None, delta_bias=None, delta_softplus=False, nrows=1, backnrows=1, oflex=True):
         ctx.delta_softplus = delta_softplus
-        out, x, *rest = selective_scan_cuda_oflex.fwd(u, delta, A, B, C, D, delta_bias, delta_softplus, 1, oflex)
+        out, x, h, *rest = selective_scan_cuda_oflex.fwd(u, delta, A, B, C, D, delta_bias, delta_softplus, 1, oflex)
         ctx.save_for_backward(u, delta, A, B, C, D, delta_bias, x)
-        return out
+        return out, h
     
     @staticmethod
     @torch.cuda.amp.custom_bwd
-    def backward(ctx, dout, *args):
+    def backward(ctx, dout, dh, *args):
         u, delta, A, B, C, D, delta_bias, x = ctx.saved_tensors
         if dout.stride(-1) != 1:
             dout = dout.contiguous()
+        if dh.stride(-1) != 1:
+            dh = dh.contiguous()
         du, ddelta, dA, dB, dC, dD, ddelta_bias, *rest = selective_scan_cuda_oflex.bwd(
-            u, delta, A, B, C, D, delta_bias, dout, x, ctx.delta_softplus, 1
+            u, delta, A, B, C, D, delta_bias, dout, dh, x, ctx.delta_softplus, 1
         )
         return (du, ddelta, dA, dB, dC, dD, ddelta_bias, None, None, None, None)
 

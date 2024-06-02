@@ -58,6 +58,7 @@ _C.LOSS.dt_Hint.REGRESS = [True, False]
 
 _C.LOSS.h_Hint = CN()
 _C.LOSS.h_Hint.WEIGHT_STAGE = [0.,0.,0.,0.,False]
+_C.LOSS.h_Hint.h_RANGE = [True, False, False, False, False] # 分别代表 ALL, 1/4, 2/4, 3/4, 4/4
 _C.LOSS.h_Hint.REGRESS = [True, False]
 
 _C.LOSS.B_AT = CN()

@@ -34,7 +34,6 @@ from utils.optimizer import build_optimizer
 from utils.logger import create_logger
 from utils.utils import  NativeScalerWithGradNormCount, auto_resume_helper, reduce_tensor
 from utils.utils import load_checkpoint_ema, load_pretrained_ema, save_checkpoint_ema
-from utils.utils import linear_annealing
 from utils.utilsKD import HintConv
 
 from RepDistiller.distiller_zoo import DistillKL, Attention, HintLoss
@@ -85,7 +84,7 @@ def parse_option():
 
     # easy config modification
     parser.add_argument('--batch-size', type=int, help="batch size for single GPU")
-    parser.add_argument('--data-path', type=str, default="/home/lixiaojie/dataset/ImageNet", help='path to dataset')
+    parser.add_argument('--data-path', type=str, default="", help='path to dataset')
     parser.add_argument('--zip', action='store_true', help='use zipped dataset instead of folder dataset')
     parser.add_argument('--cache-mode', type=str, default='part', choices=['no', 'full', 'part'],
                         help='no: no cache, '
@@ -418,9 +417,16 @@ def train_one_epoch(config, model, criterion_dict, data_loader, optimizer, epoch
                 for layer_idx in feats_h.keys():   # 每个layer
                     for h, h_t in zip(feats_h[layer_idx], feats_h_t[layer_idx]):      # 每个block
                         h_, h_t_ = h.clone(), h_t.detach().clone()
-                        # TODO 如果只取一部分呢
-                        h_ = h_[:,:,:,-1].unsqueeze(-1)
-                        h_t_ = h_t_[:,:,:,-1].unsqueeze(-1)
+                        if not config.LOSS.h_Hint.h_RANGE[0]:   # 截取特定位置的hidden states
+                            indices = [h_.shape[-1] // 4, h_.shape[-1] // 2, 3 * h_.shape[-1] // 4, h_.shape[-1] - 1]
+                            selected_h, selected_h_t = [], []
+                            for i, control in enumerate(config.LOSS.h_Hint.h_RANGE[1:]):
+                                if control:
+                                    index = indices[i]
+                                    selected_h.append(h_[..., index:index+1])
+                                    selected_h_t.append(h_t_[..., index:index+1])
+                            h_ = torch.cat(selected_h, dim=-1)
+                            h_t_ = torch.cat(selected_h_t, dim=-1)
                         key_name = f"h_Hint_regress_layer{layer_idx}"
                         with torch.cuda.amp.autocast(enabled=config.AMP_ENABLE):
                             h_ = KD_trainable_dict[key_name](h_) 

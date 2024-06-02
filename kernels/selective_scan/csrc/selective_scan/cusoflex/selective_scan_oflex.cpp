@@ -123,6 +123,7 @@ void set_ssm_params_bwd(SSMParamsBwd &params,
                         void* delta_bias_ptr,
                         void* x_ptr,
                         const at::Tensor dout,
+                        const at::Tensor dh,     // additional
                         const at::Tensor du,
                         const at::Tensor ddelta,
                         const at::Tensor dA,
@@ -133,11 +134,12 @@ void set_ssm_params_bwd(SSMParamsBwd &params,
                         bool delta_softplus) {
     // Pass in "dout" instead of "out", we're not gonna use "out" unless we have z
     set_ssm_params_fwd(params, batch, dim, seqlen, dstate, n_groups, n_chunks,
-                       u, delta, A, B, C, dout, at::Tensor(),
+                       u, delta, A, B, C, dout, dh, // additional
                        D_ptr, delta_bias_ptr, x_ptr, delta_softplus);
 
     // Set the pointers and strides.
     params.dout_ptr = dout.data_ptr();
+    params.dh_ptr = dh.data_ptr(); // additional
     params.du_ptr = du.data_ptr();
     params.dA_ptr = dA.data_ptr();
     params.dB_ptr = dB.data_ptr();
@@ -148,6 +150,9 @@ void set_ssm_params_bwd(SSMParamsBwd &params,
     // All stride are in elements, not bytes.
     params.dout_batch_stride = dout.stride(0);
     params.dout_d_stride = dout.stride(1);
+    params.dh_batch_stride = dh.stride(0); // additional
+    params.dh_d_stride = dh.stride(1); // additional
+    params.dh_dstate_stride = dh.stride(2); // additional
     params.dA_d_stride = dA.stride(0);
     params.dA_dstate_stride = dA.stride(1);
     params.dB_batch_stride = dB.stride(0);
@@ -259,6 +264,7 @@ selective_scan_bwd(const at::Tensor &u, const at::Tensor &delta,
                   const c10::optional<at::Tensor> &D_,
                   const c10::optional<at::Tensor> &delta_bias_,
                   const at::Tensor &dout,
+                  const at::Tensor &dh, // additional
                   const c10::optional<at::Tensor> &x_,
                   bool delta_softplus,
                   int nrows
@@ -266,9 +272,11 @@ selective_scan_bwd(const at::Tensor &u, const at::Tensor &delta,
     auto input_type = u.scalar_type();
     auto weight_type = A.scalar_type();
     auto output_type = dout.scalar_type();
+    auto h_type = dh.scalar_type(); // additional
     TORCH_CHECK(input_type == at::ScalarType::Float || input_type == at::ScalarType::Half || input_type == at::ScalarType::BFloat16);
     TORCH_CHECK(weight_type == at::ScalarType::Float);
     TORCH_CHECK(output_type == input_type || output_type == at::ScalarType::Float);
+    TORCH_CHECK(h_type == input_type || h_type == at::ScalarType::Float);
 
     TORCH_CHECK(delta.scalar_type() == input_type);
     TORCH_CHECK(B.scalar_type() == input_type);
@@ -280,10 +288,12 @@ selective_scan_bwd(const at::Tensor &u, const at::Tensor &delta,
     TORCH_CHECK(B.is_cuda());
     TORCH_CHECK(C.is_cuda());
     TORCH_CHECK(dout.is_cuda());
+    TORCH_CHECK(dh.is_cuda());
 
     TORCH_CHECK(u.stride(-1) == 1 || u.size(-1) == 1);
     TORCH_CHECK(delta.stride(-1) == 1 || delta.size(-1) == 1);
     TORCH_CHECK(dout.stride(-1) == 1 || dout.size(-1) == 1);
+    TORCH_CHECK(dh.stride(-1) == 1 || dh.size(-1) == 1); // additional
 
     const auto sizes = u.sizes();
     const int batch_size = sizes[0];
@@ -303,6 +313,7 @@ selective_scan_bwd(const at::Tensor &u, const at::Tensor &delta,
     CHECK_SHAPE(C, batch_size, n_groups, dstate, seqlen);
     TORCH_CHECK(C.stride(-1) == 1 || C.size(-1) == 1);
     CHECK_SHAPE(dout, batch_size, dim, seqlen);
+    CHECK_SHAPE(dh, batch_size, dim, dstate, seqlen);
 
     if (D_.has_value()) {
         auto D = D_.value();
@@ -348,7 +359,7 @@ selective_scan_bwd(const at::Tensor &u, const at::Tensor &delta,
                        D_.has_value() ? D_.value().data_ptr() : nullptr,
                        delta_bias_.has_value() ? delta_bias_.value().data_ptr() : nullptr,
                        x_.has_value() ? x_.value().data_ptr() : nullptr,
-                       dout, du, ddelta, dA, dB, dC,
+                       dout, dh, du, ddelta, dA, dB, dC,    // additional
                        D_.has_value() ? dD.data_ptr() : nullptr,
                        delta_bias_.has_value() ? ddelta_bias.data_ptr() : nullptr,
                        delta_softplus);

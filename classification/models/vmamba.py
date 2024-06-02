@@ -672,7 +672,7 @@ class SS2Dv2:
             if force_fp32:
                 xs, dts, Bs, Cs = to_fp32(xs, dts, Bs, Cs)
 
-            ys = selective_scan(
+            ys, h = selective_scan(
                 xs, dts, As, Bs, Cs, Ds, delta_bias, delta_softplus
             )
             ys = ys.view(B, K, -1, H, W)
@@ -690,7 +690,7 @@ class SS2Dv2:
         y = out_norm(y)     # y.shape: [bsz, 192, 56, 56] or [bsz, 384, 28, 28] or [bsz, 768, 14, 14] or [bsz, 1536, 7, 7]
 
         feats_dict = {}
-        for condition, key, value in zip(self.feats_flag, ['dts', 'Bs', 'Cs', 'h'], [dts, Bs, Cs, None]):
+        for condition, key, value in zip(self.feats_flag, ['dts', 'Bs', 'Cs', 'h'], [dts, Bs, Cs, h]):
             if condition:
                 feats_dict[key] = value.to(x.dtype).clone()
                 

@@ -1,4 +1,4 @@
-OUTPUT_NAME: vmamba_tiny-base_0.1CLS_0.9KL_S3-5hHint
+OUTPUT_NAME: vmamba_tiny-base_0.1CLS_0.9KL_S3-5hHint0001
 
 KD: 
   ENABLE: True
@@ -14,6 +14,7 @@ LOSS:
     T: 4.
   h_Hint:
     WEIGHT_STAGE: [0.,0.,0.,5.,True]
+    h_RANGE: [False, False, False, False, True]
   
 MODEL:
   TYPE: vssm

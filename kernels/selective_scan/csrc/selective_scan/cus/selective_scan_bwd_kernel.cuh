@@ -98,6 +98,8 @@ void selective_scan_bwd_kernel(SSMParamsBwd params) {
         + dim_id * params.delta_d_stride;
     input_t *dout = reinterpret_cast<input_t *>(params.dout_ptr) + batch_id * params.dout_batch_stride
         + dim_id * params.dout_d_stride;
+    input_t *dh = reinterpret_cast<input_t *>(params.dh_ptr) + batch_id * params.dh_batch_stride
+        + dim_id * params.dh_d_stride;  // additional
     weight_t *A = reinterpret_cast<weight_t *>(params.A_ptr) + dim_id * params.A_d_stride;
     input_t *Bvar = reinterpret_cast<input_t *>(params.B_ptr) + batch_id * params.B_batch_stride + group_id * params.B_group_stride;
     input_t *Cvar = reinterpret_cast<input_t *>(params.C_ptr) + batch_id * params.C_batch_stride + group_id * params.C_group_stride;
@@ -120,6 +122,7 @@ void selective_scan_bwd_kernel(SSMParamsBwd params) {
     u += (params.n_chunks - 1) * kChunkSize;
     delta += (params.n_chunks - 1) * kChunkSize;
     dout += (params.n_chunks - 1) * kChunkSize;
+    dh += (params.n_chunks - 1) * kChunkSize;   // additional
     Bvar += (params.n_chunks - 1) * kChunkSize;
     Cvar += (params.n_chunks - 1) * kChunkSize;
     for (int chunk = params.n_chunks - 1; chunk >= 0; --chunk) {
@@ -159,51 +162,59 @@ void selective_scan_bwd_kernel(SSMParamsBwd params) {
             weight_t A_val = A[state_idx * params.A_dstate_stride];
             weight_t A_scaled = A_val * kLog2e;
             weight_t B_vals[kNItems], C_vals[kNItems];
+            input_t dh_vals[kNItems];  // additional
             load_weight<Ktraits>(Bvar + state_idx * params.B_dstate_stride, B_vals,
                     smem_load_weight, (params.seqlen - chunk * kChunkSize));
             auto &smem_load_weight_C = smem_load_weight1;
             load_weight<Ktraits>(Cvar + state_idx * params.C_dstate_stride, C_vals,
                     smem_load_weight_C, (params.seqlen - chunk * kChunkSize));
+            load_input<Ktraits>(dh + state_idx * params.dh_dstate_stride, dh_vals,     // additional TODO 能否直接使用smem_load
+                    smem_load, (params.seqlen - chunk * kChunkSize));
+
             scan_t thread_data[kNItems], thread_reverse_data[kNItems];
             #pragma unroll
             for (int i = 0; i < kNItems; ++i) {
                 const float delta_a_exp = exp2f(delta_vals[i] * A_scaled);
-                thread_data[i] = make_float2(delta_a_exp, delta_vals[i] * float(u_vals[i]) * B_vals[i]);
+                thread_data[i] = make_float2(delta_a_exp, delta_vals[i] * float(u_vals[i]) * B_vals[i]);    // dt*A=Ahat  dt*x*B=Bhat*x
                 if (i == 0) {
                     smem_delta_a[threadIdx.x == 0 ? state_idx + (chunk % 2) * Ktraits::MaxDState: threadIdx.x + 2 * Ktraits::MaxDState] = delta_a_exp;
                 } else {
-                    thread_reverse_data[i - 1].x = delta_a_exp;
+                    thread_reverse_data[i - 1].x = delta_a_exp; // thread_reverse_data.x = dt*A=Ahat
                 }
-                thread_reverse_data[i].y = dout_vals[i] * C_vals[i];
+                thread_reverse_data[i].y = dout_vals[i] * C_vals[i];    // thread_reverse_data.y = C * dout 应该是(dh from out)'
+                thread_reverse_data[i].y += dh_vals[i];                  // dh' 来自h和out的dh   TODO 在这里相加? // additional
             }
             __syncthreads();
-            thread_reverse_data[kNItems - 1].x = threadIdx.x == kNThreads - 1
+            // 如果当前线程是线程块中的最后一个线程（threadIdx.x == kNThreads - 1），并且是最后一个数据块（chunk == params.n_chunks - 1），则赋值为 1.f。
+            // 否则，根据下一个数据块的索引，从共享内存中取值。
+            thread_reverse_data[kNItems - 1].x = threadIdx.x == kNThreads - 1 
                 ? (chunk == params.n_chunks - 1 ? 1.f : smem_delta_a[state_idx + ((chunk + 1) % 2) * Ktraits::MaxDState])
                     : smem_delta_a[threadIdx.x + 1 + 2 * Ktraits::MaxDState];
             // Initialize running total
             scan_t running_prefix = chunk > 0 && threadIdx.x % 32 == 0 ? x[(chunk - 1) * params.dstate + state_idx] : make_float2(1.f, 0.f);
             SSMScanPrefixCallbackOp<weight_t> prefix_op(running_prefix);
             Ktraits::BlockScanT(smem_scan).InclusiveScan(
-                thread_data, thread_data, SSMScanOp<weight_t>(), prefix_op
+                thread_data, thread_data, SSMScanOp<weight_t>(), prefix_op  // (ab1.x * ab0.x, ab1.x * ab0.y + ab1.y) = (Ahat累乘, hidden states)
             );
             scan_t running_postfix = chunk < params.n_chunks - 1 && threadIdx.x % 32 == 0 ? smem_running_postfix[state_idx] : make_float2(1.f, 0.f);
             SSMScanPrefixCallbackOp<weight_t> postfix_op(running_postfix);
             Ktraits::BlockReverseScanT(smem_reverse_scan).InclusiveReverseScan(
-                thread_reverse_data, thread_reverse_data, SSMScanOp<weight_t>(), postfix_op
+                thread_reverse_data, thread_reverse_data, SSMScanOp<weight_t>(), postfix_op // (ab1.x * ab0.x , ab1.x * ab0.y + ab1.y) = (Ahat累乘, dh)  计算了h之间的互相影响的梯度，真正的dh
             );
+            // TODO 在这里相加?
             if (threadIdx.x == 0) { smem_running_postfix[state_idx] = postfix_op.running_prefix; }
             weight_t dA_val = 0;
             weight_t dB_vals[kNItems], dC_vals[kNItems];
             #pragma unroll
             for (int i = 0; i < kNItems; ++i) {
-                const float dx = thread_reverse_data[i].y;
-                const float ddelta_u = dx * B_vals[i];
-                du_vals[i] += ddelta_u * delta_vals[i];
-                const float a = thread_data[i].y - (delta_vals[i] * float(u_vals[i]) * B_vals[i]);
-                ddelta_vals[i] += ddelta_u * float(u_vals[i]) + dx * A_val * a;
-                dA_val += dx * delta_vals[i] * a;
-                dB_vals[i] = dx * delta_vals[i] * float(u_vals[i]);
-                dC_vals[i] = dout_vals[i] * thread_data[i].y;
+                const float dx = thread_reverse_data[i].y;                                          // dx = dh 
+                const float ddelta_u = dx * B_vals[i];                                              // ddelta_u = dh * B
+                du_vals[i] += ddelta_u * delta_vals[i];                                             // du += ddelta_u * delta 即 dh * B * delta
+                const float a = thread_data[i].y - (delta_vals[i] * float(u_vals[i]) * B_vals[i]);  // a = h - (delta *u * b)  即 Ahat*xt-1 = A * delta * xt-1
+                ddelta_vals[i] += ddelta_u * float(u_vals[i]) + dx * A_val * a;                     // ddelta = dh * B * u + dh * A * a
+                dA_val += dx * delta_vals[i] * a;                                                   // dA += dh * delta * a
+                dB_vals[i] = dx * delta_vals[i] * float(u_vals[i]);                                 // dB = dh * delta * u
+                dC_vals[i] = dout_vals[i] * thread_data[i].y;                                       // dc = dout * h
             }
             // Block-exchange to make the atomicAdd's coalesced, otherwise they're much slower
             Ktraits::BlockExchangeT(smem_exchange).BlockedToStriped(dB_vals, dB_vals);

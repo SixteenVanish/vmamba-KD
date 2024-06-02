@@ -47,9 +47,9 @@ struct SSMParamsBase {
     index_t delta_d_stride;
     index_t out_batch_stride;
     index_t out_d_stride;
-    index_t h_batch_stride;
-    index_t h_d_stride;
-    index_t h_dstate_stride;
+    index_t h_batch_stride; // additional
+    index_t h_d_stride; // additional
+    index_t h_dstate_stride; // additional
 
     // Common data pointers.
     void *__restrict__ A_ptr;
@@ -62,7 +62,7 @@ struct SSMParamsBase {
     void *__restrict__ out_ptr;
     void *__restrict__ x_ptr;
 
-    void *__restrict__ h_ptr; // additional 新增字段，用于存储 hidden_states
+    void *__restrict__ h_ptr; // additional
 };
 
 struct SSMParamsBwd: public SSMParamsBase {
@@ -83,6 +83,10 @@ struct SSMParamsBwd: public SSMParamsBase {
     index_t ddelta_batch_stride;
     index_t ddelta_d_stride;
 
+    index_t dh_batch_stride; // additional 
+    index_t dh_d_stride; // additional 
+    index_t dh_dstate_stride; // additional 
+
     // Common data pointers.
     void *__restrict__ dout_ptr;
     void *__restrict__ dA_ptr;
@@ -92,4 +96,6 @@ struct SSMParamsBwd: public SSMParamsBase {
     void *__restrict__ du_ptr;
     void *__restrict__ ddelta_ptr;
     void *__restrict__ ddelta_bias_ptr;
+
+    void *__restrict__ dh_ptr; // additional 
 };

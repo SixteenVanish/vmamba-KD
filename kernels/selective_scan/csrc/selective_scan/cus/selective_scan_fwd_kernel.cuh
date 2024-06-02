@@ -88,7 +88,7 @@ void selective_scan_fwd_kernel(SSMParamsBase params) {
     weight_t *A = reinterpret_cast<weight_t *>(params.A_ptr) + dim_id * params.A_d_stride;  // 权重A指针
     input_t *Bvar = reinterpret_cast<input_t *>(params.B_ptr) + batch_id * params.B_batch_stride + group_id * params.B_group_stride;  // 变量B指针
     input_t *Cvar = reinterpret_cast<input_t *>(params.C_ptr) + batch_id * params.C_batch_stride + group_id * params.C_group_stride;  // 变量C指针
-    scan_t *x = reinterpret_cast<scan_t *>(params.x_ptr) + (batch_id * params.dim + dim_id) * params.n_chunks * params.dstate;  // 扫描数据指针
+    scan_t *x = reinterpret_cast<scan_t *>(params.x_ptr) + (batch_id * params.dim + dim_id) * params.n_chunks * params.dstate;
 
     float D_val = 0; // attention!
     if (params.D_ptr != nullptr) {
@@ -145,18 +145,18 @@ void selective_scan_fwd_kernel(SSMParamsBase params) {
             }
             // Initialize running total
             scan_t running_prefix;
-            // If we use WARP_SCAN then all lane 0 of all warps (not just thread 0) needs to read 如果使用WARP_SCAN，则所有warp的lane 0都需要读取
-            running_prefix = chunk > 0 && threadIdx.x % 32 == 0 ? smem_running_prefix[state_idx] : make_float2(1.f, 0.f);   // 计算运行前缀
+            // If we use WARP_SCAN then all lane 0 of all warps (not just thread 0) needs to read
+            running_prefix = chunk > 0 && threadIdx.x % 32 == 0 ? smem_running_prefix[state_idx] : make_float2(1.f, 0.f);
             // running_prefix = chunk > 0 && threadIdx.x == 0 ? smem_running_prefix[state_idx] : make_float2(1.f, 0.f);
-            SSMScanPrefixCallbackOp<weight_t> prefix_op(running_prefix);    // 定义前缀操作
+            SSMScanPrefixCallbackOp<weight_t> prefix_op(running_prefix);
             Ktraits::BlockScanT(smem_scan).InclusiveScan(
                 thread_data, thread_data, SSMScanOp<weight_t>(), prefix_op
-            ); // 执行扫描操作
-            // There's a syncthreads in the scan op, so we don't need to sync here. 扫描操作中有一个同步线程，所以不需要在这里同步
+            );
+            // There's a syncthreads in the scan op, so we don't need to sync here.
             // Unless there's only 1 warp, but then it's the same thread (0) reading and writing.
             if (threadIdx.x == 0) {
-                smem_running_prefix[state_idx] = prefix_op.running_prefix;  // 更新运行前缀
-                x[chunk * params.dstate + state_idx] = prefix_op.running_prefix;    // 更新扫描数据
+                smem_running_prefix[state_idx] = prefix_op.running_prefix;
+                x[chunk * params.dstate + state_idx] = prefix_op.running_prefix;
             }
             #pragma unroll
             for (int i = 0; i < kNItems; ++i) {
