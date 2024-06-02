@@ -1,4 +1,4 @@
-### cmd
+# cmd
 CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.launch --nnodes=1 --node_rank=0 --nproc_per_node=2 --master_addr="127.0.0.1" \
 --master_port=29600 main_KD.py \
 --cfg path_of_config \
@@ -7,7 +7,7 @@ CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.launch --nnodes=1 --node_ra
 
 path_of_data can be ‘/ibex/user/lix0k/code/mmpretrain/data/imagenet’
 
-### configs of best results:
+# configs of best results:
 ## B/C/dt ATloss
   classification/configs/kd_in100/0.1CLS_0.9KL_BCdt/BorCorDelta/vmamba_tiny-base_0.1CLS_0.9KL_S3-500B.yaml
   classification/configs/kd_in100/0.1CLS_0.9KL_BCdt/BorCorDelta/vmamba_tiny-base_0.1CLS_0.9KL_S3-500C.yaml
