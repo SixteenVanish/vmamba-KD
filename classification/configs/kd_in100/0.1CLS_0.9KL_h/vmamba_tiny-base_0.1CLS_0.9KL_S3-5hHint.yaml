@@ -1,4 +1,4 @@
-OUTPUT_NAME: vmamba_tiny-base_0.1CLS_0.9KL_S3-5hHint1111
+OUTPUT_NAME: vmamba_tiny-base_0.1CLS_0.9KL_S3-5hHint
 
 KD: 
   ENABLE: True
@@ -14,7 +14,7 @@ LOSS:
     T: 4.
   h_Hint:
     WEIGHT_STAGE: [0.,0.,0.,5.,True]
-    h_RANGE: [1, 1, 1, 1, False]
+    h_RANGE: [0, 0, 0, 0, True]
 
 AMP_ENABLE: false
 

@@ -14,8 +14,10 @@ LOSS:
     T: 4.
   h_Hint:
     WEIGHT_STAGE: [0.,0.,0.,5.,True]
-    h_RANGE: [False, False, True, False, False]
-  
+    h_RANGE: [0,1,0,0,False]
+
+AMP_ENABLE: false
+
 MODEL:
   TYPE: vssm
   NAME: vmamba_tiny

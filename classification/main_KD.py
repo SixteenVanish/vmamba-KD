@@ -417,10 +417,10 @@ def train_one_epoch(config, model, criterion_dict, data_loader, optimizer, epoch
                 for layer_idx in feats_h.keys():   # 每个layer
                     for h, h_t in zip(feats_h[layer_idx], feats_h_t[layer_idx]):      # 每个block
                         h_, h_t_ = h.clone(), h_t.detach().clone()
-                        if not config.LOSS.h_Hint.h_RANGE[0]:   # 截取特定位置的hidden states
+                        if not config.LOSS.h_Hint.h_RANGE[-1]:   # 截取特定位置的hidden states
                             indices = [h_.shape[-1] // 4, h_.shape[-1] // 2, 3 * h_.shape[-1] // 4, h_.shape[-1] - 1]
                             selected_h, selected_h_t = [], []
-                            for i, control in enumerate(config.LOSS.h_Hint.h_RANGE[1:]):
+                            for i, control in enumerate(config.LOSS.h_Hint.h_RANGE[:-1]):
                                 if control:
                                     index = indices[i]
                                     selected_h.append(h_[..., index:index+1])
