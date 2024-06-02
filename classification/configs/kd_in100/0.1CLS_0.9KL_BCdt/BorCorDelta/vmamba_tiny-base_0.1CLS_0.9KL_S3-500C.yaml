@@ -65,3 +65,4 @@ TRAIN:
   WARMUP_EPOCHS: 5
 SAVE_FREQ: 50
 
+BASE: ["configs/data_cfg/in100.yaml"]
