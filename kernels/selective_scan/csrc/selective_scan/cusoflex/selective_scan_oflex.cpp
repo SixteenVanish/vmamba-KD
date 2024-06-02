@@ -48,6 +48,7 @@ void set_ssm_params_fwd(SSMParamsBase &params,
                         const at::Tensor B,
                         const at::Tensor C,
                         const at::Tensor out,
+                        const at::Tensor h, // additional
                         void* D_ptr,
                         void* delta_bias_ptr,
                         void* x_ptr,
@@ -75,6 +76,9 @@ void set_ssm_params_fwd(SSMParamsBase &params,
     params.D_ptr = D_ptr;
     params.delta_bias_ptr = delta_bias_ptr;
     params.out_ptr = out.data_ptr();
+    if (h.defined()){
+        params.h_ptr = h.data_ptr();    // additional
+    }
     params.x_ptr = x_ptr;
 
     // All stride are in elements, not bytes.
@@ -92,7 +96,12 @@ void set_ssm_params_fwd(SSMParamsBase &params,
     params.delta_d_stride = delta.stride(1);
 
     params.out_batch_stride = out.stride(0);
-    params.out_d_stride = out.stride(1);
+    params.out_d_stride = out.stride(1); 
+    if (h.defined()){
+        params.h_batch_stride = h.stride(0);    // additional
+        params.h_d_stride = h.stride(1);    // additional
+        params.h_dstate_stride = h.stride(2);    // additional
+    }
 }
 
 void set_ssm_params_bwd(SSMParamsBwd &params,
@@ -124,7 +133,7 @@ void set_ssm_params_bwd(SSMParamsBwd &params,
                         bool delta_softplus) {
     // Pass in "dout" instead of "out", we're not gonna use "out" unless we have z
     set_ssm_params_fwd(params, batch, dim, seqlen, dstate, n_groups, n_chunks,
-                       u, delta, A, B, C, dout,
+                       u, delta, A, B, C, dout, at::Tensor(),
                        D_ptr, delta_bias_ptr, x_ptr, delta_softplus);
 
     // Set the pointers and strides.
@@ -186,6 +195,7 @@ selective_scan_fwd(const at::Tensor &u, const at::Tensor &delta,
     const int dim = sizes[1];
     const int seqlen = sizes[2];
     const int dstate = A.size(1);
+
     const int n_groups = B.size(1);
 
     TORCH_CHECK(dim % n_groups == 0, "dims should be dividable by n_groups");
@@ -217,11 +227,12 @@ selective_scan_fwd(const at::Tensor &u, const at::Tensor &delta,
 
     const int n_chunks = (seqlen + 2048 - 1) / 2048; // max is 128 * 16 = 2048 in fwd_kernel
     at::Tensor out = torch::empty({batch_size, dim, seqlen}, u.options().dtype(out_float? (at::ScalarType::Float): input_type));
+    at::Tensor h = torch::empty({batch_size, dim, dstate, seqlen}, u.options().dtype(out_float? (at::ScalarType::Float): input_type));   // additional
     at::Tensor x = torch::empty({batch_size, dim, n_chunks, dstate * 2}, u.options().dtype(weight_type));
 
     SSMParamsBase params;
     set_ssm_params_fwd(params, batch_size, dim, seqlen, dstate, n_groups, n_chunks,
-                       u, delta, A, B, C, out,
+                       u, delta, A, B, C, out, h,    // additional
                        D_.has_value() ? D_.value().data_ptr() : nullptr,
                        delta_bias_.has_value() ? delta_bias_.value().data_ptr() : nullptr,
                        x.data_ptr(),
@@ -238,7 +249,7 @@ selective_scan_fwd(const at::Tensor &u, const at::Tensor &delta,
             selective_scan_fwd_cuda<1, input_t, weight_t, float>(params, stream);
         }
     });
-    std::vector<at::Tensor> result = {out, x};
+    std::vector<at::Tensor> result = {out, x, h};
     return result;
 }
 

@@ -15,42 +15,73 @@ except:
 #     build_vim = lambda *args, **kwargs: None
 
 
+def check_loss_weights(config, name):
+    for key in config.LOSS:
+        if key.startswith(name):
+            if hasattr(config.LOSS[key], 'WEIGHT_STAGE'):
+                if config.LOSS[key].WEIGHT_STAGE[-1]:
+                    return True
+    return False
+
+
+def modify_feats_flag_dict(FEATS_FLAG_ALL, config):
+    values = []
+    for name in ['dt_', 'B_', 'C_', 'h_']:
+        if check_loss_weights(config, name):
+            values.append(True)
+        else:
+            values.append(False)
+    feats_flag_dict = {}
+    for item in FEATS_FLAG_ALL:
+        layer_idx, group_idx, *_ = item
+        if layer_idx not in feats_flag_dict:
+            feats_flag_dict[layer_idx] = {}
+        feats_flag_dict[layer_idx][group_idx] = values
+    
+    return feats_flag_dict
+
 # still on developing...
-def build_vssm_model(config, is_pretrain=False):
-    model_type = config.MODEL.TYPE
+def build_vssm_model(config, model_cfg, is_pretrain=False):
+    feats_flag_all = modify_feats_flag_dict(config.KD.FEATS_FLAG_ALL, config)
+    
+    model_type = model_cfg.TYPE
     if model_type in ["vssm"]:
         model = VSSM(
-            patch_size=config.MODEL.VSSM.PATCH_SIZE, 
-            in_chans=config.MODEL.VSSM.IN_CHANS, 
-            num_classes=config.MODEL.NUM_CLASSES, 
-            depths=config.MODEL.VSSM.DEPTHS, 
-            dims=config.MODEL.VSSM.EMBED_DIM, 
+            patch_size=model_cfg.VSSM.PATCH_SIZE, 
+            in_chans=model_cfg.VSSM.IN_CHANS, 
+            num_classes=model_cfg.NUM_CLASSES, 
+            depths=model_cfg.VSSM.DEPTHS, 
+            dims=model_cfg.VSSM.EMBED_DIM, 
             # ===================
-            ssm_d_state=config.MODEL.VSSM.SSM_D_STATE,
-            ssm_ratio=config.MODEL.VSSM.SSM_RATIO,
-            ssm_rank_ratio=config.MODEL.VSSM.SSM_RANK_RATIO,
-            ssm_dt_rank=("auto" if config.MODEL.VSSM.SSM_DT_RANK == "auto" else int(config.MODEL.VSSM.SSM_DT_RANK)),
-            ssm_act_layer=config.MODEL.VSSM.SSM_ACT_LAYER,
-            ssm_conv=config.MODEL.VSSM.SSM_CONV,
-            ssm_conv_bias=config.MODEL.VSSM.SSM_CONV_BIAS,
-            ssm_drop_rate=config.MODEL.VSSM.SSM_DROP_RATE,
-            ssm_init=config.MODEL.VSSM.SSM_INIT,
-            forward_type=config.MODEL.VSSM.SSM_FORWARDTYPE,
+            ssm_d_state=model_cfg.VSSM.SSM_D_STATE,
+            ssm_ratio=model_cfg.VSSM.SSM_RATIO,
+            ssm_rank_ratio=model_cfg.VSSM.SSM_RANK_RATIO,
+            ssm_dt_rank=("auto" if model_cfg.VSSM.SSM_DT_RANK == "auto" else int(model_cfg.VSSM.SSM_DT_RANK)),
+            ssm_act_layer=model_cfg.VSSM.SSM_ACT_LAYER,
+            ssm_conv=model_cfg.VSSM.SSM_CONV,
+            ssm_conv_bias=model_cfg.VSSM.SSM_CONV_BIAS,
+            ssm_drop_rate=model_cfg.VSSM.SSM_DROP_RATE,
+            ssm_init=model_cfg.VSSM.SSM_INIT,
+            forward_type=model_cfg.VSSM.SSM_FORWARDTYPE,
             # ===================
-            mlp_ratio=config.MODEL.VSSM.MLP_RATIO,
-            mlp_act_layer=config.MODEL.VSSM.MLP_ACT_LAYER,
-            mlp_drop_rate=config.MODEL.VSSM.MLP_DROP_RATE,
+            mlp_ratio=model_cfg.VSSM.MLP_RATIO,
+            mlp_act_layer=model_cfg.VSSM.MLP_ACT_LAYER,
+            mlp_drop_rate=model_cfg.VSSM.MLP_DROP_RATE,
             # ===================
-            drop_path_rate=config.MODEL.DROP_PATH_RATE,
-            patch_norm=config.MODEL.VSSM.PATCH_NORM,
-            norm_layer=config.MODEL.VSSM.NORM_LAYER,
-            downsample_version=config.MODEL.VSSM.DOWNSAMPLE,
-            patchembed_version=config.MODEL.VSSM.PATCHEMBED,
-            gmlp=config.MODEL.VSSM.GMLP,
+            drop_path_rate=model_cfg.DROP_PATH_RATE,
+            patch_norm=model_cfg.VSSM.PATCH_NORM,
+            norm_layer=model_cfg.VSSM.NORM_LAYER,
+            downsample_version=model_cfg.VSSM.DOWNSAMPLE,
+            patchembed_version=model_cfg.VSSM.PATCHEMBED,
+            gmlp=model_cfg.VSSM.GMLP,
             use_checkpoint=config.TRAIN.USE_CHECKPOINT,
             # ===================
-            posembed=config.MODEL.VSSM.POSEMBED,
+            posembed=model_cfg.VSSM.POSEMBED,
             imgsize=config.DATA.IMG_SIZE,
+            
+            # ===================
+            x_flag_all = config.KD.X_FLAG_ALL,
+            feats_flag_all = feats_flag_all
         )
         return model
 
@@ -58,17 +89,17 @@ def build_vssm_model(config, is_pretrain=False):
 
 
 # still on developing...
-def build_heat_model(config, is_pretrain=False):
-    model_type = config.MODEL.TYPE
+def build_heat_model(config, model_cfg, is_pretrain=False):
+    model_type = model_cfg.TYPE
     if model_type in ["heat"]:
         model = HeatM(
-            in_chans=config.MODEL.VSSM.IN_CHANS, 
-            patch_size=config.MODEL.VSSM.PATCH_SIZE, 
-            num_classes=config.MODEL.NUM_CLASSES, 
-            depths=config.MODEL.VSSM.DEPTHS, 
-            dims=config.MODEL.VSSM.EMBED_DIM, 
-            drop_path_rate=config.MODEL.DROP_PATH_RATE,
-            mlp_ratio=config.MODEL.VSSM.MLP_RATIO,
+            in_chans=model_cfg.VSSM.IN_CHANS, 
+            patch_size=model_cfg.VSSM.PATCH_SIZE, 
+            num_classes=model_cfg.NUM_CLASSES, 
+            depths=model_cfg.VSSM.DEPTHS, 
+            dims=model_cfg.VSSM.EMBED_DIM, 
+            drop_path_rate=model_cfg.DROP_PATH_RATE,
+            mlp_ratio=model_cfg.VSSM.MLP_RATIO,
         )
         return model
 
@@ -336,15 +367,20 @@ def build_heat_models_(cfg="heat_tiny", ckpt=True, only_backbone=False, with_nor
     return model
 
 
-def build_model(config, is_pretrain=False):
+def build_model(config, is_pretrain=False, get_teacher=False):
     model = None
     
+    if not get_teacher:
+        model_cfg = config.MODEL
+    else:
+        model_cfg = config.MODEL_T
+        
     if model is None:
-        model = build_vssm_model(config, is_pretrain)
+        model = build_vssm_model(config, model_cfg, is_pretrain)
     if model is None:
-        model = build_heat_model(config, is_pretrain)
+        model = build_heat_model(config, model_cfg, is_pretrain)
     if model is None:
-        model = build_mmpretrain_models(config.MODEL.TYPE, ckpt=config.MODEL.MMCKPT)
+        model = build_mmpretrain_models(model_cfg.TYPE, ckpt=model_cfg.MMCKPT)
     if model is None:
         model = build_vim(config, is_pretrain)
     return model

@@ -11,7 +11,40 @@ from functools import partial
 from torch import optim as optim
 
 
-def build_optimizer(config, model, logger, **kwargs):
+def build_optimizer(config, modules_dict, logger, **kwargs):  # modified for modules
+    """
+    Build optimizer, set weight decay of normalization to 0 by default.
+    """
+    logger.info(f"==============> building optimizer {config.TRAIN.OPTIMIZER.NAME}....................")
+    skip = {}
+    skip_keywords = {}
+    all_parameters = []
+    all_no_decay_names = set()
+    for module in modules_dict.values():
+        if hasattr(module, 'no_weight_decay'):
+            skip = module.no_weight_decay()
+        if hasattr(module, 'no_weight_decay_keywords'):
+            skip_keywords = module.no_weight_decay_keywords()
+        parameters, no_decay_names = set_weight_decay(module, skip, skip_keywords)
+        all_parameters.extend(parameters)
+        all_no_decay_names.update(no_decay_names)
+    logger.info(f"No weight decay list: {all_no_decay_names}")
+
+    opt_lower = config.TRAIN.OPTIMIZER.NAME.lower()
+    optimizer = None
+    if opt_lower == 'sgd':
+        optimizer = optim.SGD(all_parameters, momentum=config.TRAIN.OPTIMIZER.MOMENTUM, nesterov=True,
+                              lr=config.TRAIN.BASE_LR, weight_decay=config.TRAIN.WEIGHT_DECAY)
+    elif opt_lower == 'adamw':
+        optimizer = optim.AdamW(all_parameters, eps=config.TRAIN.OPTIMIZER.EPS, betas=config.TRAIN.OPTIMIZER.BETAS,
+                                lr=config.TRAIN.BASE_LR, weight_decay=config.TRAIN.WEIGHT_DECAY)
+    else:
+        raise NotImplementedError
+
+    return optimizer
+
+
+def build_optimizerv0(config, model, logger, **kwargs):
     """
     Build optimizer, set weight decay of normalization to 0 by default.
     """

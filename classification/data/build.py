@@ -18,6 +18,7 @@ from .cached_image_folder import CachedImageFolder
 from .imagenet22k_dataset import IN22KDATASET
 from .samplers import SubsetRandomSampler
 
+
 try:
     from torchvision.transforms import InterpolationMode
 
@@ -43,7 +44,9 @@ except:
 
 def build_loader(config):
     config.defrost()
-    dataset_train, config.MODEL.NUM_CLASSES = build_dataset(is_train=True, config=config)
+    dataset_train, NUM_CLASSES = build_dataset(is_train=True, config=config)
+    config.MODEL.NUM_CLASSES = NUM_CLASSES
+    config.MODEL_T.NUM_CLASSES = NUM_CLASSES
     config.freeze()
     print(f"rank {dist.get_rank()} successfully build train dataset")
     dataset_val, _ = build_dataset(is_train=False, config=config)
@@ -93,8 +96,7 @@ def build_loader(config):
             label_smoothing=config.MODEL.LABEL_SMOOTHING, num_classes=config.MODEL.NUM_CLASSES)
 
     return dataset_train, dataset_val, data_loader_train, data_loader_val, mixup_fn
-
-
+    
 def build_dataset(is_train, config):
     transform = build_transform(is_train, config)
     if config.DATA.DATASET == 'imagenet':
@@ -127,6 +129,20 @@ def build_dataset(is_train, config):
 # =============================================================================
 
         nb_classes = 1000
+
+    # -------------------------------
+    # additional part for IN100
+    elif config.DATA.DATASET == 'imagenet100':
+        prefix = 'train' if is_train else 'val'
+        if is_train and config.DATA.ANN_FILE_TRAIN:
+            from .custom_dataset import CustomDataset
+            dataset = CustomDataset(ann_file=config.DATA.ANN_FILE_TRAIN, root_dir=config.DATA.DATA_PATH, transform=transform)
+        elif not is_train and config.DATA.ANN_FILE_VAL:
+            from .custom_dataset import CustomDataset
+            dataset = CustomDataset(ann_file=config.DATA.ANN_FILE_VAL, root_dir=config.DATA.DATA_PATH, transform=transform)
+        nb_classes = 100
+    # -------------------------------
+    
     elif config.DATA.DATASET == 'imagenet22K':
         prefix = 'ILSVRC2011fall_whole'
         if is_train:

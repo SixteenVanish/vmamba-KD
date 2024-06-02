@@ -1,0 +1,35 @@
+LOSS:
+  CLASSIFICATION: 
+    WEIGHT: 1.
+  RESPONSE_KL: 
+    WEIGHT: 0.
+    T: 4.
+  
+MODEL:
+  TYPE: vssm
+  NAME: vmambav2_tiny
+  NUM_CLASSES: 100
+  DROP_PATH_RATE: 0.2
+  VSSM:
+    EMBED_DIM: 96
+    DEPTHS: [ 2, 2, 5, 2 ]
+    SSM_D_STATE: 1
+    SSM_DT_RANK: "auto"
+    SSM_RATIO: 2.0
+    SSM_CONV: 3
+    SSM_CONV_BIAS: false
+    SSM_FORWARDTYPE: "v05_noz" # v3_noz
+    MLP_RATIO: 4.0
+    DOWNSAMPLE: "v3"
+    PATCHEMBED: "v2"
+    NORM_LAYER: "ln2d"
+
+TRAIN:
+  START_EPOCH: 0
+  EPOCHS: 50
+  WARMUP_EPOCHS: 5
+SAVE_FREQ: 50
+DATA:
+  NUM_WORKERS: 4
+  ANN_FILE_TRAIN: "/ibex/user/lix0k/code/datasets/imagenet/train.txt_100_withlabel.txt"
+  ANN_FILE_VAL: "/ibex/user/lix0k/code/datasets/imagenet/val.txt_100_withlabel.txt"

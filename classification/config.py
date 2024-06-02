@@ -13,8 +13,62 @@ from yacs.config import CfgNode as CN
 
 _C = CN()
 
+_C.OUTPUT_NAME = ''
+
 # Base config files
 _C.BASE = ['']
+
+# -----------------------------------------------------------------------------
+# KD settings
+# -----------------------------------------------------------------------------
+_C.KD = CN()
+
+# whether to use KD
+_C.KD.ENABLE = False
+
+_C.KD.X_FLAG_ALL = []
+_C.KD.FEATS_FLAG_ALL = []
+
+# -----------------------------------------------------------------------------
+# Loss settings
+# -----------------------------------------------------------------------------
+_C.LOSS = CN()
+
+_C.LOSS.CLASSIFICATION = CN()
+_C.LOSS.CLASSIFICATION.WEIGHT = 1.0
+
+_C.LOSS.RESPONSE_KL = CN()
+_C.LOSS.RESPONSE_KL.WEIGHT = 0.
+_C.LOSS.RESPONSE_KL.T = 4.
+
+_C.LOSS.FEATURE_AT = CN()
+_C.LOSS.FEATURE_AT.WEIGHT = 0.
+
+_C.LOSS.B_Hint = CN()
+_C.LOSS.B_Hint.WEIGHT_STAGE = [0.,0.,0.,0.,False]
+_C.LOSS.B_Hint.REGRESS = [False, False]
+
+_C.LOSS.C_Hint = CN()
+_C.LOSS.C_Hint.WEIGHT_STAGE = [0.,0.,0.,0.,False]
+_C.LOSS.C_Hint.REGRESS = [False, False]
+
+_C.LOSS.dt_Hint = CN()
+_C.LOSS.dt_Hint.WEIGHT_STAGE = [0.,0.,0.,0.,False]
+_C.LOSS.dt_Hint.REGRESS = [True, False]
+
+_C.LOSS.h_Hint = CN()
+_C.LOSS.h_Hint.WEIGHT_STAGE = [0.,0.,0.,0.,False]
+_C.LOSS.h_Hint.REGRESS = [True, False]
+
+_C.LOSS.B_AT = CN()
+_C.LOSS.B_AT.WEIGHT_STAGE = [0.,0.,0.,0.,False]
+
+_C.LOSS.C_AT = CN()
+_C.LOSS.C_AT.WEIGHT_STAGE = [0.,0.,0.,0.,False]
+
+_C.LOSS.dt_AT = CN()
+_C.LOSS.dt_AT.REGRESS = False
+_C.LOSS.dt_AT.WEIGHT_STAGE = [0.,0.,0.,0.,False]
 
 # -----------------------------------------------------------------------------
 # Data settings
@@ -24,8 +78,11 @@ _C.DATA = CN()
 _C.DATA.BATCH_SIZE = 128
 # Path to dataset, could be overwritten by command line argument
 _C.DATA.DATA_PATH = ''
+# additional part: Path to annotiation file
+_C.DATA.ANN_FILE_TRAIN = ''
+_C.DATA.ANN_FILE_VAL = ''
 # Dataset name
-_C.DATA.DATASET = 'imagenet'
+_C.DATA.DATASET = ''
 # Input image size
 _C.DATA.IMG_SIZE = 224
 # Interpolation to resize image (random, bilinear, bicubic)
@@ -46,12 +103,12 @@ _C.DATA.MASK_PATCH_SIZE = 32
 _C.DATA.MASK_RATIO = 0.6
 
 # -----------------------------------------------------------------------------
-# Model settings
+# STUDENT/NORMAL MODEL settings
 # -----------------------------------------------------------------------------
 _C.MODEL = CN()
-# Model type
+# MODEL type
 _C.MODEL.TYPE = 'vssm'
-# Model name
+# MODEL name
 _C.MODEL.NAME = 'vssm_tiny_224'
 # Pretrained weight from checkpoint, could be imagenet22k pretrained weight
 # could be overwritten by command line argument
@@ -59,7 +116,7 @@ _C.MODEL.PRETRAINED = ''
 # Checkpoint to resume, could be overwritten by command line argument
 _C.MODEL.RESUME = ''
 # Number of classes, overwritten in data preparation
-_C.MODEL.NUM_CLASSES = 1000
+_C.MODEL.NUM_CLASSES = 100
 # Dropout rate
 _C.MODEL.DROP_RATE = 0.0
 # Drop path rate
@@ -67,7 +124,7 @@ _C.MODEL.DROP_PATH_RATE = 0.1
 # Label Smoothing
 _C.MODEL.LABEL_SMOOTHING = 0.1
 
-# MMpretrain models for test
+# MMpretrain MODELs for test
 _C.MODEL.MMCKPT = False
 
 # VSSM parameters
@@ -95,6 +152,58 @@ _C.MODEL.VSSM.DOWNSAMPLE = "v2"
 _C.MODEL.VSSM.PATCHEMBED = "v2"
 _C.MODEL.VSSM.POSEMBED = False
 _C.MODEL.VSSM.GMLP = False
+
+# -----------------------------------------------------------------------------
+# TEACHER MODEL settings
+# -----------------------------------------------------------------------------
+_C.MODEL_T = CN()
+
+# MODEL_T type
+_C.MODEL_T.TYPE = 'vssm'
+# MODEL_T name
+_C.MODEL_T.NAME = 'vssm_tiny_224'
+# Pretrained weight from checkpoint, could be imagenet22k pretrained weight
+# could be overwritten by command line argument
+_C.MODEL_T.PRETRAINED = ''
+# Checkpoint to resume, could be overwritten by command line argument
+_C.MODEL_T.RESUME = ''
+# Number of classes, overwritten in data preparation
+_C.MODEL_T.NUM_CLASSES = 100
+# Dropout rate
+_C.MODEL_T.DROP_RATE = 0.0
+# Drop path rate
+_C.MODEL_T.DROP_PATH_RATE = 0.1
+# Label Smoothing
+_C.MODEL_T.LABEL_SMOOTHING = 0.1
+
+# MMpretrain MODEL_Ts for test
+_C.MODEL_T.MMCKPT = False
+
+# VSSM parameters
+_C.MODEL_T.VSSM = CN()
+_C.MODEL_T.VSSM.PATCH_SIZE = 4
+_C.MODEL_T.VSSM.IN_CHANS = 3
+_C.MODEL_T.VSSM.DEPTHS = [2, 2, 9, 2]
+_C.MODEL_T.VSSM.EMBED_DIM = 96
+_C.MODEL_T.VSSM.SSM_D_STATE = 16
+_C.MODEL_T.VSSM.SSM_RATIO = 2.0
+_C.MODEL_T.VSSM.SSM_RANK_RATIO = 2.0
+_C.MODEL_T.VSSM.SSM_DT_RANK = "auto"
+_C.MODEL_T.VSSM.SSM_ACT_LAYER = "silu"
+_C.MODEL_T.VSSM.SSM_CONV = 3
+_C.MODEL_T.VSSM.SSM_CONV_BIAS = True
+_C.MODEL_T.VSSM.SSM_DROP_RATE = 0.0
+_C.MODEL_T.VSSM.SSM_INIT = "v0"
+_C.MODEL_T.VSSM.SSM_FORWARDTYPE = "v2"
+_C.MODEL_T.VSSM.MLP_RATIO = 4.0
+_C.MODEL_T.VSSM.MLP_ACT_LAYER = "gelu"
+_C.MODEL_T.VSSM.MLP_DROP_RATE = 0.0
+_C.MODEL_T.VSSM.PATCH_NORM = True
+_C.MODEL_T.VSSM.NORM_LAYER = "ln"
+_C.MODEL_T.VSSM.DOWNSAMPLE = "v2"
+_C.MODEL_T.VSSM.PATCHEMBED = "v2"
+_C.MODEL_T.VSSM.POSEMBED = False
+_C.MODEL_T.VSSM.GMLP = False
 
 # -----------------------------------------------------------------------------
 # Training settings
@@ -146,7 +255,7 @@ _C.TRAIN.LAYER_DECAY = 1.0
 
 # MoE
 _C.TRAIN.MOE = CN()
-# Only save model on master device
+# Only save MODEL on master device
 _C.TRAIN.MOE.SAVE_MASTER = False
 # -----------------------------------------------------------------------------
 # Augmentation settings
@@ -200,7 +309,7 @@ _C.OUTPUT = ''
 # Tag of experiment, overwritten by command line argument
 _C.TAG = 'default'
 # Frequency to save checkpoint
-_C.SAVE_FREQ = 1
+_C.SAVE_FREQ = 1000
 # Frequency to logging info
 _C.PRINT_FREQ = 10
 # Fixed random seed
@@ -223,7 +332,9 @@ def _update_config_from_file(config, cfg_file):
     for cfg in yaml_cfg.setdefault('BASE', ['']):
         if cfg:
             _update_config_from_file(
-                config, os.path.join(os.path.dirname(cfg_file), cfg)
+                config, 
+                # os.path.join(os.path.dirname(cfg_file), cfg)
+                cfg
             )
     print('=> merge config from {}'.format(cfg_file))
     config.merge_from_file(cfg_file)
@@ -284,8 +395,11 @@ def update_config(config, args):
         config.TRAIN.OPTIMIZER.NAME = args.optim
 
     # output folder
-    config.OUTPUT = os.path.join(config.OUTPUT, config.MODEL.NAME, config.TAG)
-
+    if config.KD.ENABLE:
+        config.OUTPUT = os.path.join(config.OUTPUT, config.OUTPUT_NAME, config.TAG)
+    else:
+        config.OUTPUT = os.path.join(config.OUTPUT, config.MODEL.NAME, config.TAG)
+        
     config.freeze()
 
 
@@ -295,5 +409,5 @@ def get_config(args):
     # This is for the "local variable" use pattern
     config = _C.clone()
     update_config(config, args)
-
+    
     return config

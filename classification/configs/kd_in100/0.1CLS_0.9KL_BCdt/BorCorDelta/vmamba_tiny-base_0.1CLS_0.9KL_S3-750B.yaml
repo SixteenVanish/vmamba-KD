@@ -1,0 +1,67 @@
+OUTPUT_NAME: vmamba_tiny-base_0.1CLS_0.9KL_S3-750B
+
+KD: 
+  ENABLE: True
+  # X_FLAG_ALL: [0,1,2,3]
+  FEATS_FLAG_ALL: [
+    # [0,-1,True, True, True],
+    # [1,-1,True, True, True],
+    # [2,-1,True, True, True],
+    [3,-1,True, True, True],
+  ]
+
+LOSS:
+  CLASSIFICATION: 
+    WEIGHT: 0.1
+  RESPONSE_KL: 
+    WEIGHT: 0.9
+    T: 4.
+  B_AT:
+    WEIGHT: 750.0
+  
+MODEL:
+  TYPE: vssm
+  NAME: vmamba_tiny
+  DROP_PATH_RATE: 0.2
+  VSSM:
+    EMBED_DIM: 96
+    DEPTHS: [ 2, 2, 5, 2 ]
+    SSM_D_STATE: 1
+    SSM_DT_RANK: "auto"
+    SSM_RATIO: 2.0
+    SSM_CONV: 3
+    SSM_CONV_BIAS: false
+    SSM_FORWARDTYPE: "v05_noz" # v3_noz
+    MLP_RATIO: 4.0
+    DOWNSAMPLE: "v3"
+    PATCHEMBED: "v2"
+    NORM_LAYER: "ln2d"
+
+MODEL_T:
+  PRETRAINED: "output/in100_100e_2xb128/vmamba_base/20240525040436/best.pth"  
+
+  TYPE: vssm
+  NAME: vmamba_base
+  DROP_PATH_RATE: 0.6
+  VSSM:
+    EMBED_DIM: 128
+    DEPTHS: [ 2, 2, 15, 2 ]
+    SSM_D_STATE: 1
+    SSM_DT_RANK: "auto"
+    SSM_RATIO: 2.0
+    SSM_CONV: 3
+    SSM_CONV_BIAS: false
+    SSM_FORWARDTYPE: "v05_noz" # v3_noz
+    MLP_RATIO: 4.0
+    DOWNSAMPLE: "v3"
+    PATCHEMBED: "v2"
+    NORM_LAYER: "ln2d"
+
+
+
+TRAIN:
+  START_EPOCH: 0
+  EPOCHS: 50
+  WARMUP_EPOCHS: 5
+SAVE_FREQ: 50
+

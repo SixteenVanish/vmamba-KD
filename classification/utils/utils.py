@@ -8,13 +8,40 @@
 # --------------------------------------------------------
 
 import os
+import math
 from math import inf
 import torch
+import torch.nn as nn
 import torch.distributed as dist
 from timm.utils import ModelEma as ModelEma
 
 
-def load_checkpoint_ema(config, model, optimizer, lr_scheduler, loss_scaler, logger, model_ema: ModelEma=None):
+# additional
+def freeze_model(model):
+    """
+    将模型的所有参数的requires_grad属性设置为False,并将所有子模块设置为评估模式。
+    
+    参数：
+        model (nn.Module): 要冻结的模型
+    """
+    for param in model.parameters():
+        param.requires_grad = False
+    for module in model.modules():
+        if isinstance(module, nn.Module):
+            module.eval()
+    requires_grad_flag = True
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            requires_grad_flag = False
+    eval_flag = True
+    for name, module in model.named_modules():
+        if module.training:
+            eval_flag = False
+    print(f"requires_grad setting is {requires_grad_flag}")
+    print(f"eval setting is {eval_flag}")
+    
+
+def load_checkpoint_ema(config, model, optimizer, lr_scheduler, loss_scaler, logger, model_ema: ModelEma=None, KD_trainable_dict=None):
     logger.info(f"==============> Resuming form {config.MODEL.RESUME}....................")
     if config.MODEL.RESUME.startswith('https'):
         checkpoint = torch.hub.load_state_dict_from_url(
@@ -35,6 +62,15 @@ def load_checkpoint_ema(config, model, optimizer, lr_scheduler, loss_scaler, log
         else:
             logger.warning(f"No 'model_ema' found in {config.MODEL.RESUME}! ")
 
+    if KD_trainable_dict is not None and 'KD_trainable_dict' in checkpoint:
+        kd_module_states = checkpoint['KD_trainable_dict']
+        for name, module in KD_trainable_dict.items():
+            if name in kd_module_states:
+                msg = module.load_state_dict(kd_module_states[name], strict=False)
+                logger.info(f"resuming KD module '{name}': {msg}")
+            else:
+                logger.warning(f"No state_dict found for KD module '{name}' in checkpoint!")
+    
     max_accuracy = 0.0
     max_accuracy_ema = 0.0
     if not config.EVAL_MODE and 'optimizer' in checkpoint and 'lr_scheduler' in checkpoint and 'epoch' in checkpoint:
@@ -56,16 +92,20 @@ def load_checkpoint_ema(config, model, optimizer, lr_scheduler, loss_scaler, log
     return max_accuracy, max_accuracy_ema
 
 
-def load_pretrained_ema(config, model, logger, model_ema: ModelEma=None):
-    logger.info(f"==============> Loading weight {config.MODEL.PRETRAINED} for fine-tuning......")
-    checkpoint = torch.load(config.MODEL.PRETRAINED, map_location='cpu')
+def load_pretrained_ema(config, model, logger, model_ema: ModelEma=None, load_teacher=False):
+    if not load_teacher:
+        model_cfg = config.MODEL
+    else:
+        model_cfg = config.MODEL_T
+    logger.info(f"==============> Loading weight {model_cfg.PRETRAINED} for fine-tuning......")
+    checkpoint = torch.load(model_cfg.PRETRAINED, map_location='cpu')
     
     if 'model' in checkpoint:
         msg = model.load_state_dict(checkpoint['model'], strict=False)
         logger.warning(msg)
-        logger.info(f"=> loaded 'model' successfully from '{config.MODEL.PRETRAINED}'")
+        logger.info(f"=> loaded 'model' successfully from '{model_cfg.PRETRAINED}'")
     else:
-        logger.warning(f"No 'model' found in {config.MODEL.PRETRAINED}! ")
+        logger.warning(f"No 'model' found in {model_cfg.PRETRAINED}! ")
 
     if model_ema is not None:
         if "model_ema" in checkpoint:
@@ -74,28 +114,33 @@ def load_pretrained_ema(config, model, logger, model_ema: ModelEma=None):
         if key in checkpoint:
             msg = model_ema.ema.load_state_dict(checkpoint[key], strict=False)
             logger.warning(msg)
-            logger.info(f"=> loaded '{key}' successfully from '{config.MODEL.PRETRAINED}' for model_ema")
+            logger.info(f"=> loaded '{key}' successfully from '{model_cfg.PRETRAINED}' for model_ema")
         else:
-            logger.warning(f"No '{key}' found in {config.MODEL.PRETRAINED}! ")
-
+            logger.warning(f"No '{key}' found in {model_cfg.PRETRAINED}! ")
+        
     del checkpoint
     torch.cuda.empty_cache()
 
 
-def save_checkpoint_ema(config, epoch, model, max_accuracy, optimizer, lr_scheduler, loss_scaler, logger, model_ema: ModelEma=None, max_accuracy_ema=None):
+def save_checkpoint_ema(config, epoch, model, max_accuracy, optimizer, lr_scheduler, loss_scaler, logger, model_ema: ModelEma=None, max_accuracy_ema=None, 
+                        file_name='', KD_trainable_dict={}):
     save_state = {'model': model.state_dict(),
                   'optimizer': optimizer.state_dict(),
                   'lr_scheduler': lr_scheduler.state_dict(),
                   'max_accuracy': max_accuracy,
                   'scaler': loss_scaler.state_dict(),
                   'epoch': epoch,
-                  'config': config}
-    
+                  'config': config
+                  }
+    if len(KD_trainable_dict) > 0:
+        kd_module_states = {name: module.state_dict() for name, module in KD_trainable_dict.items()}
+        save_state['KD_trainable_dict'] = kd_module_states
+        
     if model_ema is not None:
         save_state.update({'model_ema': model_ema.ema.state_dict(),
             'max_accuray_ema': max_accuracy_ema})
-
-    save_path = os.path.join(config.OUTPUT, f'ckpt_epoch_{epoch}.pth')
+    
+    save_path = os.path.join(config.OUTPUT, f'ckpt_epoch_{epoch}.pth') if file_name == '' else os.path.join(config.OUTPUT, file_name)
     logger.info(f"{save_path} saving......")
     torch.save(save_state, save_path)
     logger.info(f"{save_path} saved !!!")
@@ -157,6 +202,8 @@ class NativeScalerWithGradNormCount:
         self._scaler = torch.cuda.amp.GradScaler()
 
     def __call__(self, loss, optimizer, clip_grad=None, parameters=None, create_graph=False, update_grad=True):
+        # import pdb
+        # pdb.set_trace()
         self._scaler.scale(loss).backward(create_graph=create_graph)
         if update_grad:
             if clip_grad is not None:

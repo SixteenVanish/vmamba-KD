@@ -1,0 +1,6 @@
+
+DATA:
+  DATA_PATH: '/ibex/user/lix0k/code/mmpretrain/data/imagenet'
+  DATASET: 'imagenet100'
+  ANN_FILE_TRAIN: 'data/in100/train.txt_100_withlabel.txt'
+  ANN_FILE_VAL: 'data/in100/val.txt_100_withlabel.txt'

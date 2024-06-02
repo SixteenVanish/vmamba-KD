@@ -16,10 +16,9 @@ from fvcore.nn import FlopCountAnalysis, flop_count_str, flop_count, parameter_c
 from torchvision.models import VisionTransformer
 
 DropPath.__repr__ = lambda self: f"timm.DropPath({self.drop_prob})"
-# train speed is slower after enabling this opts.
-# torch.backends.cudnn.enabled = True
-# torch.backends.cudnn.benchmark = True
-# torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.enabled = True
+torch.backends.cudnn.benchmark = True
+torch.backends.cudnn.deterministic = True
 
 try:
     from .csm_triton import CrossScanTriton, CrossMergeTriton, CrossScanTriton1b1, getCSM
@@ -290,8 +289,8 @@ class SS2Dv0:
         del self.dt_projs
             
         # A, D =======================================
-        self.A_logs = self.A_log_init(d_state, d_inner, copies=k_group, merge=True) # (K * D, N)
-        self.Ds = self.D_init(d_inner, copies=k_group, merge=True) # (K * D)     
+        self.A_logs = self.A_log_init(d_state, d_inner, copies=k_group, merge=True) # (K * D, N) = [k_group * d_inner, d_state]
+        self.Ds = self.D_init(d_inner, copies=k_group, merge=True) # (K * D) = [k_group * d_inner]
 
         # out proj =======================================
         self.out_norm = nn.LayerNorm(d_inner)
@@ -400,11 +399,12 @@ class SS2Dv2:
         forward_type="v2",
         channel_first=False,
         # ======================
+        feats_flag = [False, False, False, False],
         **kwargs,    
     ):
         factory_kwargs = {"device": None, "dtype": None}
         super().__init__()
-        d_inner = int(ssm_ratio * d_model)
+        d_inner = int(ssm_ratio * d_model)  # 2 * [96, 192, 384, 768]
         dt_rank = math.ceil(d_model / 16) if dt_rank == "auto" else dt_rank
         self.channel_first = channel_first
         self.with_dconv = d_conv > 1
@@ -450,7 +450,7 @@ class SS2Dv2:
             self.out_norm = nn.Sigmoid()
         else:
             self.out_norm = LayerNorm(d_inner)
-
+        
         # forward_type debug =======================================
         FORWARD_TYPES = dict(
             v01=partial(self.forward_corev2, force_fp32=(not self.disable_force32), SelectiveScan=SelectiveScanMamba), # will be deleted in the future
@@ -501,8 +501,7 @@ class SS2Dv2:
             nn.Linear(d_inner, (dt_rank + d_state * 2), bias=False)
             for _ in range(k_group)
         ]
-        self.x_proj_weight = nn.Parameter(torch.stack([t.weight for t in self.x_proj], dim=0)) # (K, N, inner)
-        del self.x_proj
+        self.x_proj_weight = nn.Parameter(torch.stack([t.weight for t in self.x_proj], dim=0)) # (K, N, inner) = (k_group, dt_rank + d_state * 2, d_inner)
         
         # out proj =======================================
         self.out_act = nn.GELU() if self.oact else nn.Identity()
@@ -520,8 +519,8 @@ class SS2Dv2:
             del self.dt_projs
             
             # A, D =======================================
-            self.A_logs = self.A_log_init(d_state, d_inner, copies=k_group, merge=True) # (K * D, N)
-            self.Ds = self.D_init(d_inner, copies=k_group, merge=True) # (K * D)
+            self.A_logs = self.A_log_init(d_state, d_inner, copies=k_group, merge=True) # (K * D, N) = [k_group * d_inner, d_state]
+            self.Ds = self.D_init(d_inner, copies=k_group, merge=True) # (K * D) = [k_group * d_inner]
         elif initialize in ["v1"]:
             # simple init dt_projs, A_logs, Ds
             self.Ds = nn.Parameter(torch.ones((k_group * d_inner)))
@@ -534,7 +533,9 @@ class SS2Dv2:
             self.A_logs = nn.Parameter(torch.zeros((k_group * d_inner, d_state))) # A == -A_logs.exp() < 0; # 0 < exp(A * dt) < 1
             self.dt_projs_weight = nn.Parameter(0.1 * torch.rand((k_group, d_inner, dt_rank)))
             self.dt_projs_bias = nn.Parameter(0.1 * torch.rand((k_group, d_inner)))
-
+        
+        self.feats_flag = feats_flag
+                 
     def forward_corev2(
         self,
         x: torch.Tensor=None, 
@@ -556,17 +557,17 @@ class SS2Dv2:
         x_proj_bias = getattr(self, "x_proj_bias", None)
         dt_projs_weight = self.dt_projs_weight
         dt_projs_bias = self.dt_projs_bias
-        A_logs = self.A_logs
-        Ds = self.Ds
+        A_logs = self.A_logs     # (K * D, N)
+        Ds = self.Ds     # (K * D)
         delta_softplus = True
         out_norm = getattr(self, "out_norm", None)
         channel_first = self.channel_first
         to_fp32 = lambda *args: (_a.to(torch.float32) for _a in args)
 
-        B, D, H, W = x.shape
-        D, N = A_logs.shape
-        K, D, R = dt_projs_weight.shape
-        L = H * W
+        B, D, H, W = x.shape                 # D: 192,384,768,1536 / 256,512,1024,2048  
+        D, N = A_logs.shape                  # K=4  N=1
+        K, D, R = dt_projs_weight.shape      # L = H*W = i² for i in [56,28,14,7]
+        L = H * W   # such as 196            # R: 6,12,24,48 / 8,16,32,64
 
         def selective_scan(u, delta, A, B, C, D=None, delta_bias=None, delta_softplus=True):
             return SelectiveScan.apply(u, delta, A, B, C, D, delta_bias, delta_softplus, -1, -1, ssoflex)
@@ -645,11 +646,14 @@ class SS2Dv2:
             ).view(B, W, 2, -1, H).sum(dim=2).permute(0, 2, 3, 1)
             y = y_col
         else:
-            xs = CrossScan.apply(x)
+            xs = CrossScan.apply(x) # 128, K=4, D=768, L=H*W=196=14*14
             if no_einsum:
-                x_dbl = F.conv1d(xs.view(B, -1, L), x_proj_weight.view(-1, D, 1), bias=(x_proj_bias.view(-1) if x_proj_bias is not None else None), groups=K)
-                dts, Bs, Cs = torch.split(x_dbl.view(B, K, -1, L), [R, N, N], dim=2)
-                dts = F.conv1d(dts.contiguous().view(B, -1, L), dt_projs_weight.view(K * D, -1, 1), groups=K)
+                x_dbl = F.conv1d(xs.view(B, -1, L), x_proj_weight.view(-1, D, 1), bias=(x_proj_bias.view(-1) if x_proj_bias is not None else None), groups=K)   # 128, 104, 196
+                dts, Bs, Cs = torch.split(x_dbl.view(B, K, -1, L), [R, N, N], dim=2)    # [bsz, K=4, R, L], [bsz, 4, N, L], [bsz, 4, N, L]
+                # F.conv1d 输入：[bsz, 4 * R, L] 权重：[4 * D, R, 1] 组数：K = 4
+                # 对于每组：输入形状为 [bsz, R, L] 卷积核形状为 [D, R, 1] 每组会输出形状 [bsz, D, L]
+                # 得到[bsz, 4 * D, L] = [128, 3072, 196]
+                dts = F.conv1d(dts.contiguous().view(B, -1, L), dt_projs_weight.view(K * D, -1, 1), groups=K)   
             else:
                 x_dbl = torch.einsum("b k d l, k c d -> b k c l", xs, x_proj_weight)
                 if x_proj_bias is not None:
@@ -657,23 +661,22 @@ class SS2Dv2:
                 dts, Bs, Cs = torch.split(x_dbl, [R, N, N], dim=2)
                 dts = torch.einsum("b k r l, k d r -> b k d l", dts, dt_projs_weight)
 
-            xs = xs.view(B, -1, L)
-            dts = dts.contiguous().view(B, -1, L)
-            As = -torch.exp(A_logs.to(torch.float)) # (k * c, d_state)
-            Bs = Bs.contiguous().view(B, K, N, L)
-            Cs = Cs.contiguous().view(B, K, N, L)
-            Ds = Ds.to(torch.float) # (K * c)
-            delta_bias = dt_projs_bias.view(-1).to(torch.float)
-
+            xs = xs.view(B, -1, L)  # [128, 4, 192, 3136] -> [128, 768, 3136]        x_t
+            dts = dts.contiguous().view(B, -1, L)   # [128, 768, 3136]              delta
+            As = -torch.exp(A_logs.to(torch.float)) # (k * c, d_state) [768, 1]     A
+            Bs = Bs.contiguous().view(B, K, N, L)   # [128,4,1,3136]                B
+            Cs = Cs.contiguous().view(B, K, N, L)   # [128,4,1,3136]                C
+            Ds = Ds.to(torch.float) # (K * c) [768]                                 D
+            delta_bias = dt_projs_bias.view(-1).to(torch.float) # [4, 192] -> [768]
+            
             if force_fp32:
                 xs, dts, Bs, Cs = to_fp32(xs, dts, Bs, Cs)
 
-            ys: torch.Tensor = selective_scan(
+            ys = selective_scan(
                 xs, dts, As, Bs, Cs, Ds, delta_bias, delta_softplus
-            ).view(B, K, -1, H, W)
-            
+            )
+            ys = ys.view(B, K, -1, H, W)
             y: torch.Tensor = CrossMerge.apply(ys)
-
             if getattr(self, "__DEBUG__", False):
                 setattr(self, "__data__", dict(
                     A_logs=A_logs, Bs=Bs, Cs=Cs, Ds=Ds,
@@ -684,27 +687,37 @@ class SS2Dv2:
         y = y.view(B, -1, H, W)
         if not channel_first:
             y = y.view(B, -1, H * W).transpose(dim0=1, dim1=2).contiguous().view(B, H, W, -1) # (B, L, C)
-        y = out_norm(y)
+        y = out_norm(y)     # y.shape: [bsz, 192, 56, 56] or [bsz, 384, 28, 28] or [bsz, 768, 14, 14] or [bsz, 1536, 7, 7]
 
-        return (y.to(x.dtype) if to_dtype else y)
+        feats_dict = {}
+        for condition, key, value in zip(self.feats_flag, ['dts', 'Bs', 'Cs', 'h'], [dts, Bs, Cs, None]):
+            if condition:
+                feats_dict[key] = value.to(x.dtype).clone()
+                
+        return [(y.to(x.dtype) if to_dtype else y), feats_dict]
+        
 
     def forwardv2(self, x: torch.Tensor, **kwargs):
-        x = self.in_proj(x)
-        if not self.disable_z:
+        x = self.in_proj(x) # [bsz, 96, 56, 56]->[bsz, 192, 56, 56] or [bsz, 192, 28, 28]->[bsz, 384, 28, 28] or [bsz, 384, 14, 14]->[bsz, 768, 14, 14] or [bsz, 768, 7, 7]->[bsz, 1536, 7, 7]
+        if not self.disable_z:  # False
             x, z = x.chunk(2, dim=(1 if self.channel_first else -1)) # (b, h, w, d)
             if not self.disable_z_act:
                 z = self.act(z)
-        if not self.channel_first:
+        if not self.channel_first:  # False
             x = x.permute(0, 3, 1, 2).contiguous()
-        if self.with_dconv:
-            x = self.conv2d(x) # (b, d, h, w)
+        if self.with_dconv: # True
+            x = self.conv2d(x) # (b, d, h, w)    nochange [bsz, 192, 56, 56] or [bsz, 384, 28, 28] or [bsz, 768, 14, 14] or [bsz, 1536, 7, 7]
         x = self.act(x)
-        y = self.forward_core(x)
+        
+        y, feats_dict = self.forward_core(x)    # nochange [bsz, 192, 56, 56] or [bsz, 384, 28, 28] or [bsz, 768, 14, 14] or [bsz, 1536, 7, 7]
+           
         y = self.out_act(y)
         if not self.disable_z:
             y = y * z
-        out = self.dropout(self.out_proj(y))
-        return out
+        out = self.dropout(self.out_proj(y))    # [bsz, 96, 56, 56] or [bsz, 192, 28, 28] or [bsz, 384, 14, 14] or [bsz, 768, 7, 7]
+
+        return [out, feats_dict]
+     
 
 
 # support: xv1a,xv2a,xv3a; 
@@ -1048,6 +1061,8 @@ class VSSBlock(nn.Module):
         # =============================
         use_checkpoint: bool = False,
         post_norm: bool = False,
+        
+        feats_flag = [False, False, False, False],
         **kwargs,
     ):
         super().__init__()
@@ -1080,6 +1095,8 @@ class VSSBlock(nn.Module):
                 # ==========================
                 forward_type=forward_type,
                 channel_first=channel_first,
+                # ==========================
+                feats_flag = feats_flag,
             )
         
         self.drop_path = DropPath(drop_path)
@@ -1089,19 +1106,29 @@ class VSSBlock(nn.Module):
             self.norm2 = norm_layer(hidden_dim)
             mlp_hidden_dim = int(hidden_dim * mlp_ratio)
             self.mlp = _MLP(in_features=hidden_dim, hidden_features=mlp_hidden_dim, act_layer=mlp_act_layer, drop=mlp_drop_rate, channels_first=channel_first)
-
+        
+        self.feats_dict = {}
+        
     def _forward(self, input: torch.Tensor):
         x = input
         if self.ssm_branch:
             if self.post_norm:
-                x = x + self.drop_path(self.norm(self.op(x)))
-            else:
-                x = x + self.drop_path(self.op(self.norm(x)))
+                x_residual = x
+                x, feats_dict = self.op(x)
+                x = x_residual + self.drop_path(self.norm(x))
+                # x = x + self.drop_path(self.norm(self.op(x)))
+            else:   # default
+                x_residual = x
+                x = self.norm(x)
+                x, feats_dict = self.op(x)
+                x = x_residual + self.drop_path(x)
+                # x = x + self.drop_path(self.op(self.norm(x)))
         if self.mlp_branch:
             if self.post_norm:
                 x = x + self.drop_path(self.norm2(self.mlp(x))) # FFN
             else:
                 x = x + self.drop_path(self.mlp(self.norm2(x))) # FFN
+        self.feats_dict = feats_dict
         return x
 
     def forward(self, input: torch.Tensor):
@@ -1144,6 +1171,10 @@ class VSSM(nn.Module):
         # =========================
         posembed=False,
         imgsize=224,
+        
+        # =========================
+        x_flag_all = [],
+        feats_flag_all = {},
         **kwargs,
     ):
         super().__init__()
@@ -1219,6 +1250,9 @@ class VSSM(nn.Module):
                 mlp_act_layer=mlp_act_layer,
                 mlp_drop_rate=mlp_drop_rate,
                 gmlp=gmlp,
+                
+                # =================
+                feats_flag_layer = feats_flag_all.get(i_layer, {})
             ))
 
         self.classifier = nn.Sequential(OrderedDict(
@@ -1230,7 +1264,24 @@ class VSSM(nn.Module):
         ))
 
         self.apply(self._init_weights)
+        
+        self.x_flag_all = x_flag_all
+        self.feats_flag_all = feats_flag_all
+        
+        self.feats_dict_all = {'dts':{}, 'Bs':{}, 'Cs':{}, 'h':{}}
+        self._init_feats_dict_all()
+    
+    def _init_feats_dict_all(self):
+        for key in self.feats_dict_all.keys():
+            self.feats_dict_all[key] = {layer_idx: [] for layer_idx in self.feats_flag_all.keys()}
 
+    def _complete_feats_dict_all(self):
+        for layer_idx, feats_flag_layer in self.feats_flag_all.items():
+            for block_idx in feats_flag_layer:
+                feats_dict_block = self.layers[layer_idx].blocks[block_idx]
+                for key, value in feats_dict_block.feats_dict.items():
+                    self.feats_dict_all[key][layer_idx].append(value)
+                    
     @staticmethod
     def _pos_embed(embed_dims, patch_size, img_size):
         patch_height, patch_width = (img_size // patch_size, img_size // patch_size)
@@ -1326,11 +1377,21 @@ class VSSM(nn.Module):
         mlp_act_layer=nn.GELU,
         mlp_drop_rate=0.0,
         gmlp=False,
+        
+        # ===========================
+        feats_flag_layer={}, 
         **kwargs,
-    ):
+    ): 
         # if channel first, then Norm and Output are both channel_first
         depth = len(drop_path)
         blocks = []
+        
+        feats_flag_layer_ = copy.deepcopy(feats_flag_layer)
+        keys_to_update = [key for key in feats_flag_layer_.keys() if key < 0]
+        for key in keys_to_update:
+            new_key = key + depth
+            feats_flag_layer_[new_key] = feats_flag_layer_.pop(key)
+            
         for d in range(depth):
             blocks.append(VSSBlock(
                 hidden_dim=dim, 
@@ -1351,6 +1412,8 @@ class VSSM(nn.Module):
                 mlp_drop_rate=mlp_drop_rate,
                 gmlp=gmlp,
                 use_checkpoint=use_checkpoint,
+                
+                feats_flag=feats_flag_layer_.get(d, [False, False, False, False]),
             ))
         
         return nn.Sequential(OrderedDict(
@@ -1358,17 +1421,26 @@ class VSSM(nn.Module):
             downsample=downsample,
         ))
 
-    def forward(self, x: torch.Tensor):
-        x = self.patch_embed(x)
+    def forward(self, x: torch.Tensor, return_all=False):
+        x = self.patch_embed(x)     # [bsz, 3, 224, 224] -> [bsz, 96, 224/4=56, 224/4=56]
         if self.pos_embed is not None:
             pos_embed = self.pos_embed.permute(0, 2, 3, 1) if not self.channel_first else self.pos_embed
             x = x + pos_embed
-        for layer in self.layers:
-            x = layer(x)
+        x_list = []
+        for idx, layer in enumerate(self.layers):
+            x = layer(x)    # -> [bsz, 192, 28, 28] or [bsz, 384, 14, 14] or [bsz, 768, 7, 7] or [bsz, 768, 7, 7]
+            if idx in self.x_flag_all:
+                x_list.append(x)
         x = self.classifier(x)
-        return x
-
-    def flops(self, shape=(3, 224, 224), verbose=True):
+        if self.feats_flag_all:
+            self._init_feats_dict_all()
+            self._complete_feats_dict_all()
+        if not return_all:
+            return x
+        else:
+            return x, x_list, self.feats_dict_all
+                    
+    def flops(self, shape=(3, 224, 224)):
         # shape = self.__input_shape__[1:]
         supported_ops={
             "aten::silu": None, # as relu is in _IGNORED_OPS
@@ -1377,10 +1449,10 @@ class VSSM(nn.Module):
             "aten::flip": None, # as permute is in _IGNORED_OPS
             # "prim::PythonOp.CrossScan": None,
             # "prim::PythonOp.CrossMerge": None,
-            "prim::PythonOp.SelectiveScanMamba": partial(selective_scan_flop_jit, flops_fn=flops_selective_scan_fn, verbose=verbose),
-            "prim::PythonOp.SelectiveScanOflex": partial(selective_scan_flop_jit, flops_fn=flops_selective_scan_fn, verbose=verbose),
-            "prim::PythonOp.SelectiveScanCore": partial(selective_scan_flop_jit, flops_fn=flops_selective_scan_fn, verbose=verbose),
-            "prim::PythonOp.SelectiveScanNRow": partial(selective_scan_flop_jit, flops_fn=flops_selective_scan_fn, verbose=verbose),
+            "prim::PythonOp.SelectiveScanMamba": partial(selective_scan_flop_jit, flops_fn=flops_selective_scan_fn),
+            "prim::PythonOp.SelectiveScanOflex": partial(selective_scan_flop_jit, flops_fn=flops_selective_scan_fn),
+            "prim::PythonOp.SelectiveScanCore": partial(selective_scan_flop_jit, flops_fn=flops_selective_scan_fn),
+            "prim::PythonOp.SelectiveScanNRow": partial(selective_scan_flop_jit, flops_fn=flops_selective_scan_fn),
         }
 
         model = copy.deepcopy(self)
@@ -1485,8 +1557,8 @@ class Backbone_VSSM(VSSM):
                 norm_layer = getattr(self, f'outnorm{i}')
                 out = norm_layer(o)
                 if not self.channel_first:
-                    out = out.permute(0, 3, 1, 2)
-                outs.append(out.contiguous())
+                    out = out.permute(0, 3, 1, 2).contiguous()
+                outs.append(out)
 
         if len(self.out_indices) == 0:
             return x
