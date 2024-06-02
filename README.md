@@ -5,6 +5,7 @@ cd kernels/selective_scan & pip install .
 
 # cmd
 cd classification
+
 CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.launch --nnodes=1 --node_rank=0 --nproc_per_node=2 --master_addr="127.0.0.1" \
 --master_port=29600 main_KD.py \
 --cfg path_of_config \
